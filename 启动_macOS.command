@@ -68,7 +68,6 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # ---- 2. 用 uv 跑 launcher.py（uv 自动管理 Python 版本） ----
 # 不加 --quiet：让 uv 下载 Python 的进度直接给用户看
-# --no-project 防止 uv 误把当前目录当 uv 项目去解析 pyproject.toml
 echo ""
-echo "正在准备 Python 环境并启动 launcher..."
-exec "$UV" run --no-project --python ">=3.10" -- python scripts/launcher.py
+echo "正在准备 Python 环境并启动 launcher（uv + pyproject.toml）..."
+exec "$UV" run --python ">=3.10" -- python scripts/launcher.py

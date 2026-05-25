@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
@@ -47,40 +48,14 @@ PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 PYPI_MIRROR_HOST = "pypi.tuna.tsinghua.edu.cn（清华大学）"
 HF_MIRROR = "https://hf-mirror.com"  # HuggingFace 镜像（DINOv2、NIMA 等模型）
 
-# 所有模式都必装的核心包（HTTP 服务、图像读写、扫描）。
-# 不能塞进 MODE_PACKAGES["fast"]——否则"只选 expert"的用户会缺 Pillow/flask/...
-# 应用根本起不来。
-CORE_PACKAGES = [
-    "Pillow>=10.0",
-    "pillow-heif>=0.16",
-    "numpy>=1.26",
-    "scipy>=1.11",
-    "flask>=3.0",
-    "imagehash>=4.3",
-    "opencv-contrib-python>=4.9",
-    # RAW 支持（提取 RAW 内嵌的 JPEG 预览图，无需 demosaic）。
-    # 任何模式都可能遇到 RAW 文件，所以放 CORE。
-    "rawpy>=0.18",
-    # 相机水印导出：把原图的 EXIF orientation 归零，避免再次旋转。
-    # 选完片任何模式都能加水印，所以放 CORE。
-    "piexif>=1.1.3",
-]
-
-# 每种模式在 CORE 之外额外需要的 pip 包。
-MODE_PACKAGES = {
-    "fast": [],     # 极速模式所有依赖都在 CORE 里
-    "expert": [
-        "torch>=2.2",
-        "torchvision>=0.17",
-        "transformers>=4.40",
-        "insightface>=0.7",
-        "onnxruntime>=1.16",
-        "pyiqa>=0.1.10",
-        "timm>=0.9",
-    ],
-    "tycoon": [
-        "openai>=1.40",
-    ],
+# 依赖定义见项目根目录 pyproject.toml（由 uv 安装/sync）
+# fast → 仅 [project].dependencies
+# expert → + optional-dependencies.expert
+# tycoon → + optional-dependencies.tycoon
+MODE_EXTRAS = {
+    "fast": [],
+    "expert": ["expert"],
+    "tycoon": ["tycoon"],
 }
 
 MODE_LABELS = {
@@ -88,6 +63,8 @@ MODE_LABELS = {
     "expert": "专家模式（深度学习，约 2-3GB，下载 5-15 分钟）",
     "tycoon": "土豪模式（LLM 判图，约 5MB，需自备 API key）",
 }
+
+ALL_MODES = ["fast", "expert", "tycoon"]
 
 
 # ---------- 输出 ----------
@@ -184,6 +161,44 @@ def ask_modes(previous: list[str] | None) -> list[str]:
         return chosen
 
 
+def parse_modes_arg(raw: str) -> list[str]:
+    """解析 --modes：fast,expert,tycoon / all。"""
+    text = raw.strip().lower()
+    if text in ("all", "4", "*"):
+        return ALL_MODES[:]
+    chosen: list[str] = []
+    for token in re.split(r"[\s,]+", text):
+        token = token.strip()
+        if not token:
+            continue
+        if token in ("4", "all"):
+            return ALL_MODES[:]
+        if token in ("1", "fast"):
+            key = "fast"
+        elif token in ("2", "expert"):
+            key = "expert"
+        elif token in ("3", "tycoon"):
+            key = "tycoon"
+        elif token in MODE_EXTRAS:
+            key = token
+        else:
+            die(f"无法识别的模式：{token}（可用 fast, expert, tycoon, all）")
+        if key not in chosen:
+            chosen.append(key)
+    if not chosen:
+        die(f"无效 --modes：{raw}")
+    return chosen
+
+
+def resolve_modes(modes_arg: str | None, install: dict) -> list[str]:
+    if modes_arg:
+        return parse_modes_arg(modes_arg)
+    prev = install.get("modes") or []
+    if prev:
+        return prev
+    return ALL_MODES[:]
+
+
 # ---------- GitHub 更新检查 ----------
 
 def http_get(url: str, timeout: float = 8.0) -> bytes:
@@ -219,8 +234,9 @@ def download_tarball(sha: str, dest: Path) -> bool:
 # 不会被更新覆盖的文件 / 目录（用户私有数据 + 体积大的依赖）
 PRESERVE = {
     ".venv",
+    "pyproject.toml",
+    "uv.lock",
     ".pic_selecter_install.json",
-    ".pic_selecter_deps.stamp",
     "__pycache__",
     ".git",
     "pic_test",     # 开发用的测试图，可能用户也存了私货
@@ -313,19 +329,23 @@ def have_uv() -> str | None:
     return None
 
 
-def ensure_venv() -> None:
-    if PY_IN_VENV.exists():
-        return
-    info("创建虚拟环境 .venv/（首次约 5-30 秒，需要时会自动下载 Python）...")
-    info("看到 'Downloading cpython...' 滚动是正常的，请耐心等待。")
+def require_uv() -> str:
     uv = have_uv()
-    if uv:
-        # uv 创建 venv 更快，且能自动下载合适版本的 Python
-        subprocess.check_call([uv, "venv", str(VENV), "--python", ">=3.10"])
-    else:
-        # 退化到 stdlib venv
-        subprocess.check_call([sys.executable, "-m", "venv", str(VENV)])
-    info("虚拟环境已就绪")
+    if not uv:
+        die(
+            "片刻使用 uv 管理 Python 依赖，未找到 uv。\n"
+            "  macOS/Linux: curl -LSf https://astral.sh/uv/install.sh | sh\n"
+            "  Windows: powershell -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+        )
+    return uv
+
+
+def _modes_sync_sig(modes: list[str]) -> str:
+    """用于判断是否需要重新 uv sync 的签名。"""
+    extras: list[str] = []
+    for m in modes:
+        extras.extend(MODE_EXTRAS.get(m, []))
+    return "uv:" + ",".join(sorted(set(extras))) + "|" + ",".join(sorted(modes))
 
 
 # 每个模式的预估安装时间（用于打印让用户心里有数）
@@ -336,32 +356,21 @@ MODE_TIME_ESTIMATE = {
 }
 
 
-def pip_install(packages: list[str]) -> None:
-    if not packages:
-        return
-    uv = have_uv()
-    if uv:
-        cmd = [uv, "pip", "install", "--python", str(PY_IN_VENV)]
-        if USE_MIRROR:
-            # uv 用 --index-url 切镜像；同时把 PyPI 官方作为 fallback 防镜像缺包
-            cmd += ["--index-url", PYPI_MIRROR,
-                    "--extra-index-url", "https://pypi.org/simple/"]
-        cmd += packages
-    else:
-        cmd = [str(PY_IN_VENV), "-m", "pip", "install",
-               "--disable-pip-version-check", "--no-input"]
-        if USE_MIRROR:
-            cmd += ["-i", PYPI_MIRROR,
-                    "--extra-index-url", "https://pypi.org/simple/"]
-        cmd += packages
+def _uv_sync_cmd(uv: str, modes: list[str]) -> list[str]:
+    """构造 uv sync 命令（按模式启用 optional-dependencies）。"""
+    cmd = [uv, "sync", "--python", ">=3.10"]
+    seen_extras: set[str] = set()
+    for m in modes:
+        for extra in MODE_EXTRAS.get(m, []):
+            if extra not in seen_extras:
+                seen_extras.add(extra)
+                cmd += ["--extra", extra]
     if USE_MIRROR:
-        info(f"使用国内镜像源：{PYPI_MIRROR_HOST}")
-        info("（海外用户想用 PyPI 官方源请在终端先 `export PIANKE_NO_MIRROR=1` 再启动）")
-    info("接下来会看到 pip 滚动下载进度条——只要在动就是在装，不要关窗口。")
-    print()
-    subprocess.check_call(cmd)
-    print()
-    _ensure_opencv_single()
+        cmd += [
+            "--index-url", PYPI_MIRROR,
+            "--extra-index-url", "https://pypi.org/simple/",
+        ]
+    return cmd
 
 
 def _ensure_opencv_single() -> None:
@@ -385,41 +394,38 @@ def _ensure_opencv_single() -> None:
     if not conflicts:
         return
     info(f"检测到冲突的 OpenCV 包：{', '.join(conflicts)}，正在清理...")
-    subprocess.call([py, "-m", "pip", "uninstall", "-y", *conflicts])
-    # 重新拉 contrib 修复 cv2 共享文件
-    uv = have_uv()
-    cmd = ([uv, "pip", "install", "--python", py] if uv else
-           [py, "-m", "pip", "install", "--disable-pip-version-check", "--no-input"])
-    cmd += ["--force-reinstall", "--no-deps"]
+    uv = require_uv()
+    subprocess.call([uv, "pip", "uninstall", "--python", py, "-y", *conflicts])
+    cmd = [uv, "pip", "install", "--python", py, "--force-reinstall", "--no-deps"]
     if USE_MIRROR:
-        flag = "--index-url" if uv else "-i"
-        cmd += [flag, PYPI_MIRROR, "--extra-index-url", "https://pypi.org/simple/"]
+        cmd += ["--index-url", PYPI_MIRROR, "--extra-index-url", "https://pypi.org/simple/"]
     cmd += ["opencv-contrib-python>=4.9"]
     subprocess.check_call(cmd)
     info("OpenCV 已修复（只保留 contrib 版） ✓")
 
 
-def packages_for_modes(modes: list[str]) -> list[str]:
-    """返回 CORE + 选中模式的额外包。任何模式都会带上 CORE。"""
-    seen: dict[str, None] = {pkg: None for pkg in CORE_PACKAGES}
-    for m in modes:
-        for pkg in MODE_PACKAGES[m]:
-            seen[pkg] = None
-    return list(seen.keys())
-
-
 def ensure_dependencies(modes: list[str], install: dict, force: bool) -> None:
-    """按模式列表安装依赖。已装过且模式未变则跳过。"""
-    packages = packages_for_modes(modes)
-    sig = "|".join(sorted(packages))
+    """用 uv sync 按模式安装 pyproject.toml 中的依赖。"""
+    uv = require_uv()
+    sig = _modes_sync_sig(modes)
     last_sig = install.get("packages_sig")
     if not force and last_sig == sig and PY_IN_VENV.exists():
-        info("依赖已是最新，跳过安装")
+        info("依赖已是最新，跳过 uv sync")
         return
 
+    if not (ROOT / "pyproject.toml").is_file():
+        die(f"未找到 pyproject.toml（期望路径：{ROOT / 'pyproject.toml'}）")
+
     est = "、".join(f"{m}（{MODE_TIME_ESTIMATE[m]}）" for m in modes)
-    info(f"准备安装 {len(packages)} 个 pip 包，预计耗时：{est}")
-    pip_install(packages)
+    info(f"uv sync（pyproject.toml）预计耗时：{est}")
+    if USE_MIRROR:
+        info(f"使用国内镜像源：{PYPI_MIRROR_HOST}")
+        info("（海外用户请 `export PIANKE_NO_MIRROR=1` 后重试）")
+    info("看到下载进度滚动是正常的，请耐心等待。")
+    print()
+    subprocess.check_call(_uv_sync_cmd(uv, modes), cwd=str(ROOT))
+    print()
+    _ensure_opencv_single()
     install["packages_sig"] = sig
     install["modes"] = modes
     save_install(install)
@@ -451,9 +457,59 @@ def run_app(port: int) -> int:
         return 0
 
 
+# ---------- 仅安装环境（供 Makefile / CI） ----------
+
+def run_setup_only(*, no_update: bool, modes_arg: str | None) -> int:
+    banner("片刻 · 环境准备")
+    if USE_MIRROR:
+        print("  国内镜像：清华 PyPI + hf-mirror.com（PIANKE_NO_MIRROR=1 可关闭）")
+    print()
+
+    if not (ROOT / "app.py").exists():
+        die(f"未找到 app.py（期望路径：{ROOT / 'app.py'}）")
+
+    install = load_install()
+    if not no_update:
+        step(1, 2, "检查 GitHub 更新")
+        check_and_apply_update(install)
+    else:
+        info("跳过 GitHub 更新检查（--no-update）")
+
+    step(2, 2, "准备 Python 虚拟环境与依赖")
+    modes = resolve_modes(modes_arg, install)
+    info(f"本次启用：{', '.join(modes)}")
+    install["modes"] = modes
+    save_install(install)
+    ensure_dependencies(modes, install, force=False)
+    info("环境准备完成 ✓")
+    return 0
+
+
 # ---------- 主流程 ----------
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="片刻 · 启动器")
+    parser.add_argument(
+        "--setup-only",
+        action="store_true",
+        help="仅创建 .venv 并安装依赖，不启动 app（供 make / CI）",
+    )
+    parser.add_argument(
+        "--no-update",
+        action="store_true",
+        help="跳过 GitHub 更新检查",
+    )
+    parser.add_argument(
+        "--modes",
+        default=None,
+        metavar="MODES",
+        help="非交互指定模式：fast,expert,tycoon 或 all（默认：上次记录，否则全部）",
+    )
+    args = parser.parse_args()
+
+    if args.setup_only:
+        return run_setup_only(no_update=args.no_update, modes_arg=args.modes)
+
     banner("片刻 · 启动器")
     print()
     print("  本启动器会自动：检查更新 → 选模式 → 装依赖 → 起服务 → 开浏览器")
@@ -469,19 +525,24 @@ def main() -> int:
 
     # 步骤 1：检查更新
     step(1, 4, "检查 GitHub 更新")
-    check_and_apply_update(install)
+    if not args.no_update:
+        check_and_apply_update(install)
+    else:
+        info("跳过 GitHub 更新检查（--no-update）")
 
     # 步骤 2：选择模式
     step(2, 4, "选择运行模式")
-    prev_modes = install.get("modes") or []
-    modes = ask_modes(prev_modes)
+    if args.modes:
+        modes = parse_modes_arg(args.modes)
+    else:
+        prev_modes = install.get("modes") or []
+        modes = ask_modes(prev_modes)
     info(f"本次启用：{', '.join(modes)}")
     install["modes"] = modes
     save_install(install)
 
     # 步骤 3：venv + 依赖
     step(3, 4, "准备 Python 虚拟环境与依赖")
-    ensure_venv()
     ensure_dependencies(modes, install, force=False)
 
     # 步骤 4：启动

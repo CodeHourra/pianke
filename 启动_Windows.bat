@@ -64,7 +64,7 @@ REM ---- 2. 用 uv 跑 launcher.py ----
 REM 不加 --quiet：让 uv 下载 Python 的进度直接给用户看
 echo.
 echo 正在准备 Python 环境并启动 launcher...
-"%UV%" run --no-project --python ">=3.10" -- python scripts\launcher.py
+"%UV%" run --python ">=3.10" -- python scripts\launcher.py
 set "RC=%errorlevel%"
 
 if not "%RC%"=="0" (

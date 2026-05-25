@@ -1,53 +1,31 @@
 #!/usr/bin/env bash
-# 片刻 — 启动脚本
+# 片刻 — 启动脚本（uv + pyproject.toml）
 #
-# 第一次运行：自动创建 .venv 并装依赖
-# 后续运行：直接启动
+# 第一次运行：自动 uv sync 并启动
 # 任何参数都会透传给 app.py（如 --port 8080 --no-browser）
 
-set -e
+set -euo pipefail
 cd "$(dirname "$0")/.."
+export PIANKE_ROOT="$(pwd)"
 
-VENV=".venv"
-REQ="requirements.txt"
-STAMP=".pic_selecter_deps.stamp"
+find_uv() {
+  if command -v uv &>/dev/null; then command -v uv; return; fi
+  for cand in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
+    [ -x "$cand" ] && echo "$cand" && return
+  done
+}
 
-# ---------- 找 python ----------
-if command -v python3 &>/dev/null; then
-  PY=python3
-elif command -v python &>/dev/null; then
-  PY=python
-else
-  echo "❌ 未找到 python3 / python。装一个 Python 3.10+ 再试：" >&2
-  echo "   https://www.python.org/downloads/" >&2
+UV="$(find_uv || true)"
+if [ -z "$UV" ]; then
+  echo "❌ 未找到 uv。请安装: curl -LSf https://astral.sh/uv/install.sh | sh" >&2
   exit 1
 fi
 
-# ---------- 创建 venv ----------
-if [ ! -d "$VENV" ]; then
-  echo "▶ 创建虚拟环境：$VENV"
-  "$PY" -m venv "$VENV"
-  rm -f "$STAMP"
-fi
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
+MODES="${PIANKE_MODES:-all}"
+echo "▶ uv sync（模式: ${MODES}）..."
+"$UV" run --python ">=3.10" -- python scripts/launcher.py --setup-only --no-update --modes "$MODES"
 
-# ---------- 检查 / 安装依赖 ----------
-# requirements.txt 比 stamp 新就重装；stamp 不存在也重装。
-needs_install=0
-if [ ! -f "$STAMP" ]; then
-  needs_install=1
-elif [ "$REQ" -nt "$STAMP" ]; then
-  needs_install=1
-fi
-
-if [ "$needs_install" = "1" ]; then
-  echo "▶ 安装依赖（首次或 requirements.txt 已更新）..."
-  pip install -q --disable-pip-version-check -r "$REQ"
-  touch "$STAMP"
-fi
-
-# ---------- 启动 ----------
 echo "▶ 启动 pic_selecter..."
-exec python app.py "$@"
+exec "$UV" run --python ">=3.10" -- python app.py "$@"
