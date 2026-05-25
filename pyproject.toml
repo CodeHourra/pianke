@@ -1,0 +1,42 @@
+[project]
+name = "pianke"
+version = "0.1.0"
+description = "片刻 — 本地照片擂台选片工具"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "Pillow>=10.0",
+    "pillow-heif>=0.16",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "flask>=3.0",
+    "imagehash>=4.3",
+    # 显著性区算法需要 contrib（cv2.saliency）；launcher 会在安装后清理冲突的 opencv 包
+    "opencv-contrib-python>=4.9",
+    "rawpy>=0.18",
+    "piexif>=1.1.3",
+]
+
+[project.optional-dependencies]
+# 极速模式：仅使用 [project].dependencies，无需额外 extra
+expert = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "transformers>=4.40",
+    "insightface>=0.7",
+    "onnxruntime>=1.16",
+    "pyiqa>=0.1.10",
+    "timm>=0.9",
+]
+tycoon = [
+    "openai>=1.40",
+]
+
+[tool.uv]
+# 应用型仓库：不将本项目安装为 site-packages 里的包
+package = false
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

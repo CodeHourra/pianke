@@ -404,7 +404,7 @@ def require_expert_capabilities() -> None:
     missing = [k for k, v in caps.items() if not v]
     if missing:
         raise VisionUnavailable(
-            f"专家模式缺少依赖：{', '.join(missing)}。请按 requirements.txt 安装完整依赖。"
+            f"专家模式缺少依赖：{', '.join(missing)}。请执行 uv sync --extra expert。"
         )
 
 
@@ -415,7 +415,7 @@ def require_tycoon_capabilities() -> None:
     missing = [k for k in needed if not caps.get(k)]
     if missing:
         raise VisionUnavailable(
-            f"土豪模式缺少依赖：{', '.join(missing)}。请按 requirements.txt 安装。"
+            f"土豪模式缺少依赖：{', '.join(missing)}。请执行 uv sync --extra tycoon。"
         )
 
 
