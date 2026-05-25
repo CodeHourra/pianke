@@ -46,9 +46,9 @@
 
 > 💡 **强烈推荐小白用户使用 [Trae](https://www.trae.com.cn/)（或 Qoder）**：装好 Trae 后用它打开本项目文件夹，直接告诉 AI：
 >
-> > **"先把 pip 换成阿里云源（`https://mirrors.aliyun.com/pypi/simple/`）或清华源（`https://pypi.tuna.tsinghua.edu.cn/simple`），再安装相关依赖并运行这个项目。"**
+> > **"用 uv 安装依赖并运行这个项目（国内请走清华 PyPI 镜像）。"**
 >
-> 国内默认走的 PyPI 官方源在没有梯子的情况下经常卡到超时，专家模式光依赖就有 2GB 多，不换源基本装不下来。换成阿里 / 清华镜像后整套依赖几分钟就能装完，剩下的交给 Trae 就行。
+> 项目使用 **uv + pyproject.toml** 管理依赖；一键启动器默认已配置清华镜像 + hf-mirror。专家模式约 2GB，国内不换源容易超时。
 
 ### 方式一：一键启动（推荐非开发者）
 
@@ -64,30 +64,46 @@
 
 *注：启动器会自动在项目独立目录下下载并构建 Python 环境，不污染你的系统环境。国内用户默认启用 PyPI 和模型镜像，可以使用环境变量 `PIANKE_NO_MIRROR=1` 禁用镜像走官方源。*
 
-### 方式二：手动启动（适合开发者）
+### 方式三：Tauri 桌面版（独立窗口 + Dock 图标）
 
-如果你已安装 Python 环境并希望手动控制：
+适合已安装 **Node.js** 与 **Rust >= 1.88** 的用户。在项目根目录执行：
 
 ```bash
-# 1. 创建并激活虚拟环境
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# 2. 安装项目依赖（包含所有模式的并集）
-pip install -r requirements.txt
-
-# 3. 运行服务（默认端口 5057，自动打开浏览器）
-python app.py
-
-# 常用参数：
-python app.py --port 8080 --no-browser
+make setup          # 首次：uv sync + npm 依赖 + 图标
+make dev            # 开发：Tauri 窗口 + uv run python app.py
+make run            # 仅浏览器：uv run python app.py
+make build-mac      # 打包 macOS .app（须在 macOS 上）
+make build-windows  # 打包 Windows 安装包（须在 Windows 上）
+make artifacts      # 查看构建产物路径
 ```
 
-> ⚠️ **开发模式提示**：若手动安装依赖，可能因传递依赖导致 `opencv-python` 冲突。可运行以下命令修复：
-> ```bash
-> pip uninstall -y opencv-python opencv-python-headless
-> pip install --force-reinstall --no-deps "opencv-contrib-python>=4.9"
-> ```
+仅装极速模式依赖（更快）：`PIANKE_MODES=fast make setup`
+
+打包后的 `.app` 不含 `.venv`（体积过大）。分发时请保留完整仓库并先 `make setup`，或设置 `PIANKE_ROOT` 指向含 `.venv` 的目录。
+
+### 方式二：手动启动（适合开发者）
+
+依赖由 **[uv](https://docs.astral.sh/uv/)** 管理，清单在 `pyproject.toml`。
+
+```bash
+# 1. 安装 uv（若尚未安装）
+curl -LSf https://astral.sh/uv/install.sh | sh
+
+# 2. 同步依赖到 .venv/（按需选择模式）
+uv sync                              # 极速模式
+uv sync --extra expert               # + 专家模式
+uv sync --extra expert --extra tycoon   # 全部模式
+
+# 3. 运行服务（默认端口 5057，自动打开浏览器）
+uv run python app.py
+
+# 常用参数：
+uv run python app.py --port 8080 --no-browser
+```
+
+国内用户可在同步前设置镜像（与启动器一致）：默认走清华 PyPI；禁用镜像用 `export PIANKE_NO_MIRROR=1`。
+
+> ⚠️ **OpenCV**：专家模式若 `cv2.saliency` 不可用，请用启动器安装（会自动修复），或执行 `uv run python scripts/launcher.py --setup-only --modes expert`。
 
 ---
 
