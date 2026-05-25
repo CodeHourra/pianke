@@ -1,0 +1,5 @@
+# Tauri 2 当前依赖链需要 rustc >= 1.88（icu_* / plist / time 等）
+# 进入本目录时 rustup 会自动切换/安装对应工具链
+[toolchain]
+channel = "1.88"
+profile = "minimal"
